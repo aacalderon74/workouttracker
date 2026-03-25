@@ -9,6 +9,9 @@
         body { background-color: #0f172a; font-family: ui-sans-serif, system-ui, sans-serif; }
         .card { background-color: #1e293b; border: 1px solid #334155; }
         .muscle-btn.active { background-color: #3b82f6; border-color: #60a5fa; color: white; }
+        input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(1);
+        }
     </style>
 </head>
 <body class="text-slate-200 p-4 pb-12">
@@ -51,7 +54,7 @@
     </div>
 
     <!-- Toast Notification -->
-    <div id="toast" class="fixed bottom-10 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-6 py-3 rounded-2xl font-bold shadow-2xl opacity-0 transition-all duration-300 pointer-events-none z-50">
+    <div id="toast" class="fixed bottom-10 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-6 py-3 rounded-2xl font-bold shadow-2xl opacity-0 transition-all duration-300 pointer-events-none z-50 text-center min-w-[200px]">
         Log Saved
     </div>
 
@@ -59,6 +62,7 @@
         const MUSCLES = ["Chest", "Back", "Legs", "Shoulders", "Biceps", "Triceps"];
         let selectedMuscles = new Set();
         let history = JSON.parse(localStorage.getItem('workout_history')) || [];
+        let editingId = null;
 
         function init() {
             const selector = document.getElementById('muscle-selector');
@@ -106,13 +110,10 @@
             };
             
             history.unshift(entry);
-            if (history.length > 15) history.pop();
-            
-            localStorage.setItem('workout_history', JSON.stringify(history));
+            sortAndSave();
             
             showToast(`Logged: ${entry.groups.join(' & ')}`);
             
-            // Reset UI
             selectedMuscles.clear();
             document.querySelectorAll('.muscle-btn').forEach(b => b.classList.remove('active'));
             updateUI();
@@ -120,9 +121,46 @@
 
         function deleteLog(id) {
             history = history.filter(item => item.id !== id);
-            localStorage.setItem('workout_history', JSON.stringify(history));
+            sortAndSave();
             updateUI();
             showToast("Entry Deleted");
+        }
+
+        function startEdit(id) {
+            editingId = id;
+            renderHistory();
+        }
+
+        function cancelEdit() {
+            editingId = null;
+            renderHistory();
+        }
+
+        function saveEdit(id) {
+            const dateInput = document.getElementById(`edit-date-${id}`);
+            if (!dateInput.value) return cancelEdit();
+
+            const newDate = new Date(dateInput.value);
+            // Preserving current time to avoid weird "0 days since" logic if edited to today
+            const now = new Date();
+            newDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
+
+            const index = history.findIndex(item => item.id === id);
+            if (index !== -1) {
+                history[index].timestamp = newDate.getTime();
+                sortAndSave();
+                showToast("Date Updated");
+            }
+            
+            editingId = null;
+            updateUI();
+        }
+
+        function sortAndSave() {
+            // Ensure chronological order for proper "Priority" calculation
+            history.sort((a, b) => b.timestamp - a.timestamp);
+            if (history.length > 20) history.pop();
+            localStorage.setItem('workout_history', JSON.stringify(history));
         }
 
         function calculateNext() {
@@ -130,7 +168,6 @@
             const daysEl = document.getElementById('days-since-last');
             const cardEl = document.getElementById('recommendation-card');
 
-            // Find last worked timestamp for each muscle
             const muscleStatus = MUSCLES.map(muscle => {
                 const lastLog = history.find(entry => entry.groups.includes(muscle));
                 return {
@@ -139,7 +176,6 @@
                 };
             });
 
-            // Sort by oldest timestamp
             muscleStatus.sort((a, b) => a.lastTimestamp - b.lastTimestamp);
 
             if (history.length === 0) {
@@ -148,18 +184,16 @@
                 return;
             }
 
-            // Suggest top 2 most rested muscles
             const suggest1 = muscleStatus[0].name;
             const suggest2 = muscleStatus[1].name;
             nextEl.innerText = `${suggest1} & ${suggest2}`;
 
-            // Calculate days since any workout
             const lastWorkoutTime = history[0].timestamp;
             const diffDays = Math.floor((new Date() - lastWorkoutTime) / (1000 * 60 * 60 * 24));
 
             cardEl.classList.remove('border-green-500', 'border-blue-500', 'border-orange-500');
-            if (diffDays === 0) {
-                daysEl.innerText = "Logged earlier today.";
+            if (diffDays <= 0) {
+                daysEl.innerText = "Logged today.";
                 cardEl.classList.add('border-green-500');
             } else if (diffDays === 1) {
                 daysEl.innerText = "Resting since yesterday.";
@@ -175,18 +209,43 @@
             container.innerHTML = history.length === 0 
                 ? '<p class="text-slate-600 text-sm italic p-4 text-center">No recent history</p>' 
                 : history.map(item => {
-                    const date = new Date(item.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    const isEditing = editingId === item.id;
+                    const dateObj = new Date(item.timestamp);
+                    const displayDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    const inputDate = dateObj.toISOString().split('T')[0];
+
+                    if (isEditing) {
+                        return `
+                            <div class="card p-4 rounded-xl flex flex-col space-y-3 border-blue-500">
+                                <p class="text-white font-bold">${item.groups.join(' & ')}</p>
+                                <div class="flex items-center space-x-2">
+                                    <input type="date" id="edit-date-${item.id}" value="${inputDate}" 
+                                        class="bg-slate-900 border border-slate-700 rounded p-1 text-xs text-white flex-1 focus:outline-none focus:border-blue-500">
+                                    <button onclick="saveEdit('${item.id}')" class="bg-blue-600 text-white px-3 py-1 rounded text-xs font-bold">Save</button>
+                                    <button onclick="cancelEdit()" class="text-slate-500 text-xs px-2">Cancel</button>
+                                </div>
+                            </div>
+                        `;
+                    }
+
                     return `
                         <div class="card p-4 rounded-xl flex justify-between items-center group">
                             <div>
                                 <p class="text-white font-bold">${item.groups.join(' & ')}</p>
-                                <p class="text-[10px] text-slate-500 uppercase font-mono">${date}</p>
+                                <p class="text-[10px] text-slate-500 uppercase font-mono">${displayDate}</p>
                             </div>
-                            <button onclick="deleteLog('${item.id}')" class="text-slate-600 hover:text-red-500 p-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                            </button>
+                            <div class="flex items-center space-x-1">
+                                <button onclick="startEdit('${item.id}')" class="text-slate-600 hover:text-blue-400 p-2 transition-colors" title="Edit Date">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                    </svg>
+                                </button>
+                                <button onclick="deleteLog('${item.id}')" class="text-slate-600 hover:text-red-500 p-2 transition-colors" title="Delete Entry">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
                     `;
                 }).join('');
